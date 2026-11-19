@@ -1,10 +1,10 @@
 # ddns-updater-installer
 
-Installs [qdm12/ddns-updater](https://github.com/qdm12/ddns-updater) on Windows from a single PowerShell command.
+Installs [qdm12/ddns-updater](https://github.com/qdm12/ddns-updater) on Windows from a single PowerShell command - DuckDNS only
 
 ## Install
 
-1. Open PowerShell as the Windows user that should run the updater.
+1. Open PowerShell.
 2. Copy the command below and paste it into PowerShell.
 3. Press Enter. Approve the Windows UAC prompt if asked to create the background service.
 
@@ -30,7 +30,7 @@ The command writes the encoded installer to a temporary file, runs it with `-Exe
 
 Use the **Update DDNS Updater** and **Uninstall DDNS Updater** shortcuts in the Start menu. Both remain available after the initial install.
 
-## Regenerating the command
+## Regenerating the encoded command (developer note)
 
 After editing `install-windows.ps1`, run:
 
@@ -38,4 +38,4 @@ After editing `install-windows.ps1`, run:
 pwsh ./encode-installer.ps1
 ```
 
-This replaces the text between the README markers. Use `pwsh ./encode-installer.ps1 -Check` to verify the README is current. A GitHub Action runs the encoder automatically and opens a pull request when the generated command changes.
+This replaces the text between the README markers. Use `pwsh ./encode-installer.ps1 -Check` to verify the README is current.
