@@ -91,6 +91,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 renders a progress bar for every chunk of a download,
+# which can make Invoke-WebRequest many times slower. Disable it for this process.
+$ProgressPreference = 'SilentlyContinue'
 
 if ($env:OS -ne 'Windows_NT') {
     throw 'This installer targets Windows only.'
@@ -391,7 +394,7 @@ function Uninstall-BackgroundService {
         Remove-ManagedServiceWithSc
     }
     if (Get-ManagedService) {
-        Write-Warning "Could not remove the service '$($script:ServiceId}'. Remove it manually with: sc.exe delete $($script:ServiceId)"
+        Write-Warning "Could not remove the service '$($script:ServiceId)'. Remove it manually with: sc.exe delete $($script:ServiceId)"
     }
 }
 
@@ -424,9 +427,16 @@ function Save-ReleaseExecutable {
             if (-not $AssetInfo.Checksums) {
                 throw 'checksums.txt is missing from the release; use -SkipChecksum to bypass verification.'
             }
-            $checksumText = (Invoke-WebRequest -Uri $AssetInfo.Checksums.browser_download_url -UseBasicParsing).Content
+            $checksumContent = (Invoke-WebRequest -Uri $AssetInfo.Checksums.browser_download_url -UseBasicParsing).Content
+            # Windows PowerShell 5.1 returns byte[] for application/octet-stream responses,
+            # which is what GitHub serves release assets as. PowerShell 7 returns a string.
+            if ($checksumContent -is [byte[]]) {
+                $checksumText = [Text.Encoding]::UTF8.GetString($checksumContent)
+            } else {
+                $checksumText = [string]$checksumContent
+            }
             $entryPattern = '\s' + [regex]::Escape($AssetInfo.Executable.name) + '$'
-            $entry = $checksumText -split "`r?`n" | Where-Object { $_ -match $entryPattern } | Select-Object -First 1
+            $entry = ($checksumText -split "`r?`n" | Where-Object { $_.TrimEnd() -match $entryPattern } | Select-Object -First 1)
             if (-not $entry) {
                 throw "No checksum entry found for $($AssetInfo.Executable.name)."
             }

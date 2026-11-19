@@ -37,12 +37,13 @@ $p='__ENCODED_INSTALLER__'; $t=Join-Path $env:TEMP 'ddns-updater-installer.ps1';
 '@
 $command = $commandTemplate.Replace('__ENCODED_INSTALLER__', $encodedInstaller)
 
-$block = (@(
+$block = @(
     $beginMarker
     '```powershell'
     $command
+    '```'
     $endMarker
-) -join "`n") + "`n"
+) -join "`n"
 
 $readme = [IO.File]::ReadAllText($ReadmePath)
 $pattern = '(?s)' + [regex]::Escape($beginMarker) + '.*?' + [regex]::Escape($endMarker)
