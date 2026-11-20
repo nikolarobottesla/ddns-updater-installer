@@ -4,10 +4,11 @@
 
 .DESCRIPTION
     Downloads the newest Windows release from GitHub (with SHA-256 verification),
-    installs it into a program directory, generates a DuckDNS config.json by
-    prompting for the domain and token, registers a Windows background service
-    that starts automatically at boot, creates Start menu and desktop shortcuts
-    to run, update and uninstall, and registers an Add/Remove Programs entry.
+    installs it into a program directory, generates a DuckDNS config.json that
+    maintains both IPv4 (A) and IPv6 (AAAA) records by prompting for the domain
+    and token, registers a Windows background service that starts automatically
+    at boot, creates Start menu shortcuts to run, update and uninstall, and
+    registers an Add/Remove Programs entry.
 
     The executable is a console program, so WinSW (a small, pinned service
     wrapper) is downloaded from GitHub to host it as a real Windows service.
@@ -30,9 +31,6 @@
 
 .PARAMETER DataDir
     Where config.json and updates.json are kept. Defaults to <InstallDir>\data.
-
-.PARAMETER NoDesktopShortcuts
-    Only create the shortcuts in the Start menu folder.
 
 .PARAMETER NoPath
     Do not add the install directory to the current user's PATH.
@@ -73,8 +71,6 @@ param(
 
     [string]$DataDir,
 
-    [switch]$NoDesktopShortcuts,
-
     [switch]$NoPath,
 
     [switch]$NoService,
@@ -109,6 +105,7 @@ $script:RepoOwner = 'qdm12'
 $script:RepoName = 'ddns-updater'
 $script:LatestReleaseUrl = "https://api.github.com/repos/$script:RepoOwner/$script:RepoName/releases/latest"
 $script:AppName = 'DDNS Updater'
+$script:InstallerVersion = '1.0.0'
 $script:ExeName = 'ddns-updater.exe'
 $script:InstallerName = 'DDNS-Updater-Install.ps1'
 $script:SettingsKey = 'HKCU:\Software\DDNS-Updater'
@@ -137,7 +134,6 @@ function Request-Elevation {
     if ($DataDir) {
         $forwardedArguments.Add(('-DataDir "{0}"' -f [IO.Path]::GetFullPath($DataDir)))
     }
-    if ($NoDesktopShortcuts) { $forwardedArguments.Add('-NoDesktopShortcuts') }
     if ($NoPath) { $forwardedArguments.Add('-NoPath') }
     if ($NoService) { $forwardedArguments.Add('-NoService') }
     if ($SkipChecksum) { $forwardedArguments.Add('-SkipChecksum') }
@@ -512,7 +508,7 @@ function New-DdnsConfigFile {
             $answer = Read-Host "Configuration already exists at $ConfigFilePath. Overwrite? [y/N]"
             if ($answer -notmatch '^[Yy]') {
                 Write-Host 'Keeping the existing configuration.'
-                return
+                return $false
             }
         }
         $backupPath = '{0}.bak-{1}' -f $ConfigFilePath, (Get-Date -Format 'yyyyMMdd-HHmmss')
@@ -522,12 +518,22 @@ function New-DdnsConfigFile {
 
     $selectedDomain = Read-DuckDnsDomain -InitialValue $Domain
     $selectedToken = Read-DuckDnsToken -InitialValue $Token
+    # Each DuckDNS setting maintains a single record family, so use one entry for
+    # IPv4 (A) and one for IPv6 (AAAA) to keep both records updated.
     $configObject = [ordered]@{
         settings = @(
             [ordered]@{
-                provider = 'duckdns'
-                domain   = $selectedDomain
-                token    = $selectedToken
+                provider   = 'duckdns'
+                domain     = $selectedDomain
+                token      = $selectedToken
+                ip_version = 'ipv4'
+            }
+            [ordered]@{
+                provider    = 'duckdns'
+                domain      = $selectedDomain
+                token       = $selectedToken
+                ip_version  = 'ipv6'
+                ipv6_suffix = ''
             }
         )
     }
@@ -535,6 +541,7 @@ function New-DdnsConfigFile {
     $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText($ConfigFilePath, $json + [Environment]::NewLine, $utf8WithoutBom)
     Write-Host "Wrote the DuckDNS configuration to $ConfigFilePath"
+    return $true
 }
 
 function New-Shortcut {
@@ -562,9 +569,6 @@ function New-Shortcut {
 function New-ProgramShortcuts {
     [IO.Directory]::CreateDirectory($script:StartMenuFolder) | Out-Null
     $shortcutLocations = @($script:StartMenuFolder)
-    if (-not $NoDesktopShortcuts) {
-        $shortcutLocations += [Environment]::GetFolderPath('Desktop')
-    }
 
     $runArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Action Run' -f $script:InstalledScript
     $updateArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Action Update' -f $script:InstalledScript
@@ -590,6 +594,7 @@ function New-ProgramShortcuts {
 
 function Remove-ProgramShortcuts {
     $shortcutNames = @('DDNS Updater.lnk', 'Update DDNS Updater.lnk', 'Uninstall DDNS Updater.lnk')
+    # Keep Desktop in the removal list so updates/uninstalls clean up shortcuts from older installs.
     $shortcutLocations = @($script:StartMenuFolder, [Environment]::GetFolderPath('Desktop'))
     foreach ($location in $shortcutLocations) {
         foreach ($shortcutName in $shortcutNames) {
@@ -719,6 +724,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 }
 
 function Install-DdnsUpdater {
+    Write-Host "$($script:AppName) installer v$($script:InstallerVersion)"
     Write-Host "Installing $($script:AppName) into $($script:InstallDir)"
     [IO.Directory]::CreateDirectory($script:InstallDir) | Out-Null
     [IO.Directory]::CreateDirectory($script:DataDir) | Out-Null
@@ -767,10 +773,15 @@ function Install-DdnsUpdater {
 }
 
 function Update-DdnsUpdater {
+    Write-Host "$($script:AppName) installer v$($script:InstallerVersion)"
     if (-not (Test-Path -LiteralPath $script:ExePath)) {
         throw "DDNS Updater is not installed at $($script:InstallDir). Run the installer first."
     }
-    if (-not (Test-Path -LiteralPath $script:InstalledScript)) {
+
+    # Refresh the installed copy of this script so the Start menu shortcuts run
+    # the current logic. Guard against copying the file onto itself when Update
+    # is invoked through the installed script.
+    if ([IO.Path]::GetFullPath($PSCommandPath) -ne [IO.Path]::GetFullPath($script:InstalledScript)) {
         Copy-Item -LiteralPath $PSCommandPath -Destination $script:InstalledScript -Force
     }
 
@@ -779,7 +790,13 @@ function Update-DdnsUpdater {
     $assetInfo = Get-ReleaseAssetInfo -Release $release -Architecture $architecture
     $latestVersion = $assetInfo.Version.TrimStart([char]'v')
     $installedVersion = Get-InstalledVersion
-    if ($installedVersion -eq $latestVersion -and -not $Force) {
+    $updateBinary = ($installedVersion -ne $latestVersion) -or $Force
+
+    # Offer to regenerate the config so changes to config generation (such as
+    # adding the IPv6 record) can be applied to an existing install.
+    $configUpdated = New-DdnsConfigFile -ConfigFilePath $script:ConfigPath
+
+    if (-not $updateBinary -and -not $configUpdated) {
         Write-Host "Already up to date ($installedVersion). Use -Force to reinstall."
         return
     }
@@ -791,29 +808,32 @@ function Update-DdnsUpdater {
     }
     $wasRunning = Stop-DdnsProcess
 
-    $temporaryExe = Save-ReleaseExecutable -AssetInfo $assetInfo -DestinationDirectory $script:InstallDir
-    try {
-        Move-Item -LiteralPath $temporaryExe -Destination $script:ExePath -Force
-    } catch {
-        Remove-Item -LiteralPath $temporaryExe -Force -ErrorAction SilentlyContinue
-        throw
+    if ($updateBinary) {
+        $temporaryExe = Save-ReleaseExecutable -AssetInfo $assetInfo -DestinationDirectory $script:InstallDir
+        try {
+            Move-Item -LiteralPath $temporaryExe -Destination $script:ExePath -Force
+        } catch {
+            Remove-Item -LiteralPath $temporaryExe -Force -ErrorAction SilentlyContinue
+            throw
+        }
+        Write-Host "Updated $($script:AppName) to $latestVersion."
+        if ($managedService) {
+            New-ServiceWrapperConfig
+        } elseif (-not $NoService) {
+            Install-BackgroundService
+            $managedService = Get-ManagedService
+        }
     }
 
-    if ($managedService) {
-        New-ServiceWrapperConfig
-        if ($serviceWasRunning) {
-            Start-BackgroundService
-        }
-    } elseif (-not $NoService) {
-        Install-BackgroundService
+    # Restart so the new binary and/or regenerated config is picked up.
+    if ($serviceWasRunning) {
+        Start-BackgroundService
+    } elseif ($wasRunning -and -not $managedService) {
+        Start-DdnsProcess
     }
 
     Register-ProgramMetadata -Version $assetInfo.Version -ExecutablePath $script:ExePath
     New-ProgramShortcuts
-    Write-Host "Updated $($script:AppName) to $latestVersion."
-    if ($wasRunning -and -not $serviceWasRunning) {
-        Start-DdnsProcess
-    }
 }
 
 function Uninstall-DdnsUpdater {
