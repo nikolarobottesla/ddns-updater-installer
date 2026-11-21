@@ -39,6 +39,19 @@
     Skip creating the Windows service. The program then only runs from the
     "Run" shortcut and is not started at boot.
 
+.PARAMETER StartMenuFolder
+    Internal. Start menu folder resolved before UAC elevation.
+
+.PARAMETER SettingsKey
+    Internal. Settings registry key resolved before UAC elevation.
+
+.PARAMETER UninstallKey
+    Internal. Uninstall registry key resolved before UAC elevation.
+
+.PARAMETER UserSid
+    Internal. SID of the original user, used to update the correct user PATH
+    when the elevated process runs under different credentials.
+
 .PARAMETER Elevated
     Internal flag used by the UAC self-elevation relaunch.
 
@@ -83,6 +96,14 @@ param(
 
     [string]$Token,
 
+    [string]$StartMenuFolder,
+
+    [string]$SettingsKey,
+
+    [string]$UninstallKey,
+
+    [string]$UserSid,
+
     [switch]$Elevated
 )
 
@@ -105,11 +126,9 @@ $script:RepoOwner = 'qdm12'
 $script:RepoName = 'ddns-updater'
 $script:LatestReleaseUrl = "https://api.github.com/repos/$script:RepoOwner/$script:RepoName/releases/latest"
 $script:AppName = 'DDNS Updater'
-$script:InstallerVersion = '1.0.0'
+$script:InstallerVersion = '1.1.0'
 $script:ExeName = 'ddns-updater.exe'
 $script:InstallerName = 'DDNS-Updater-Install.ps1'
-$script:SettingsKey = 'HKCU:\Software\DDNS-Updater'
-$script:UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DDNS-Updater'
 $script:PowerShellExe = (Get-Process -Id $PID).Path
 if (-not $script:PowerShellExe) {
     $script:PowerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -119,43 +138,6 @@ function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Request-Elevation {
-    if ($Elevated) {
-        throw 'Administrator privileges are required to manage the Windows service. Run PowerShell as Administrator, or use -NoService to skip the service.'
-    }
-
-    $forwardedArguments = [System.Collections.Generic.List[string]]::new()
-    $forwardedArguments.Add(('-Action {0}' -f $Action))
-    if ($InstallDir) {
-        $forwardedArguments.Add(('-InstallDir "{0}"' -f [IO.Path]::GetFullPath($InstallDir)))
-    }
-    if ($DataDir) {
-        $forwardedArguments.Add(('-DataDir "{0}"' -f [IO.Path]::GetFullPath($DataDir)))
-    }
-    if ($NoPath) { $forwardedArguments.Add('-NoPath') }
-    if ($NoService) { $forwardedArguments.Add('-NoService') }
-    if ($SkipChecksum) { $forwardedArguments.Add('-SkipChecksum') }
-    if ($Force) { $forwardedArguments.Add('-Force') }
-    if ($Domain) { $forwardedArguments.Add(('-Domain "{0}"' -f $Domain)) }
-    if ($Token) { $forwardedArguments.Add(('-Token "{0}"' -f $Token)) }
-    $forwardedArguments.Add('-Elevated')
-
-    $elevationArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" {1}' -f $PSCommandPath, ($forwardedArguments -join ' ')
-    Write-Host 'Requesting administrator privileges to manage the Windows service ...'
-    try {
-        Start-Process -FilePath $script:PowerShellExe -ArgumentList $elevationArguments -Verb RunAs -Wait
-    } catch {
-        throw 'Administrator privileges are required to manage the Windows service, and the UAC prompt was declined. Re-run with -NoService to install without a service.'
-    }
-    exit
-}
-
-$managesService = ($Action -eq 'Uninstall') -or
-    (($Action -eq 'Install' -or $Action -eq 'Update') -and -not $NoService)
-if ($managesService -and -not (Test-IsAdministrator)) {
-    Request-Elevation
 }
 
 function Resolve-InstallDirectory {
@@ -173,6 +155,69 @@ function Resolve-InstallDirectory {
     return Join-Path $env:LOCALAPPDATA 'Programs\DDNS-Updater'
 }
 
+function Request-Elevation {
+    if ($Elevated) {
+        throw 'Administrator privileges are required to manage the Windows service. Run PowerShell as Administrator, or use -NoService to skip the service.'
+    }
+
+    # Forward the already-resolved per-user paths so the elevated process does
+    # not pick up a different user's profile when UAC uses another account.
+    $forwardedArguments = [System.Collections.Generic.List[string]]::new()
+    $forwardedArguments.Add(('-Action {0}' -f $Action))
+    $forwardedArguments.Add(('-InstallDir "{0}"' -f $script:InstallDir))
+    $forwardedArguments.Add(('-DataDir "{0}"' -f $script:DataDir))
+    $forwardedArguments.Add(('-StartMenuFolder "{0}"' -f $script:StartMenuFolder))
+    $forwardedArguments.Add(('-SettingsKey "{0}"' -f $script:SettingsKey))
+    $forwardedArguments.Add(('-UninstallKey "{0}"' -f $script:UninstallKey))
+    $forwardedArguments.Add(('-UserSid "{0}"' -f $script:UserSid))
+    if ($NoPath) { $forwardedArguments.Add('-NoPath') }
+    if ($NoService) { $forwardedArguments.Add('-NoService') }
+    if ($SkipChecksum) { $forwardedArguments.Add('-SkipChecksum') }
+    if ($Force) { $forwardedArguments.Add('-Force') }
+    if ($Domain) { $forwardedArguments.Add(('-Domain "{0}"' -f $Domain)) }
+    if ($Token) { $forwardedArguments.Add(('-Token "{0}"' -f $Token)) }
+    $forwardedArguments.Add('-Elevated')
+
+    $elevationArguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" {1}' -f $PSCommandPath, ($forwardedArguments -join ' ')
+    Write-Host 'Requesting administrator privileges to manage the Windows service ...'
+    try {
+        $elevatedProcess = Start-Process -FilePath $script:PowerShellExe -ArgumentList $elevationArguments -Verb RunAs -Wait -PassThru
+    } catch {
+        throw 'Administrator privileges are required to manage the Windows service, and the UAC prompt was declined. Re-run with -NoService to install without a service.'
+    }
+    if ($null -ne $elevatedProcess.ExitCode -and $elevatedProcess.ExitCode -ne 0) {
+        throw "The elevated install failed with exit code $($elevatedProcess.ExitCode). Check the output in the elevated window for details."
+    }
+    exit 0
+}
+
+# Resolve all per-user locations before elevating. If a standard user approves
+# UAC with different credentials, the elevated process runs as that admin and
+# its APPDATA, LOCALAPPDATA and HKCU would otherwise point to the wrong profile.
+if (-not $UserSid) {
+    $UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+}
+if (-not $SettingsKey) { $SettingsKey = 'HKCU:\Software\DDNS-Updater' }
+if (-not $UninstallKey) { $UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DDNS-Updater' }
+# Anchor registry keys to the original user's SID. Passing a literal HKCU: path
+# through elevation would resolve to the admin's hive instead of the user's.
+if ($SettingsKey -match '^HKCU:\\(.*)$') {
+    $SettingsKey = "Registry::HKEY_USERS\$UserSid\$($Matches[1])"
+}
+if ($UninstallKey -match '^HKCU:\\(.*)$') {
+    $UninstallKey = "Registry::HKEY_USERS\$UserSid\$($Matches[1])"
+}
+if (-not $StartMenuFolder) {
+    $StartMenuFolder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\DDNS Updater'
+}
+$script:SettingsKey = $SettingsKey
+$script:UninstallKey = $UninstallKey
+$script:StartMenuFolder = $StartMenuFolder
+$script:UserSid = $UserSid
+# In the elevated process HKCU is the admin's hive, so target the original
+# user's Environment key directly when changing their PATH.
+$script:UserEnvironmentKey = if ($Elevated) { "Registry::HKEY_USERS\$UserSid\Environment" } else { $null }
+
 $script:InstallDir = Resolve-InstallDirectory
 if ($DataDir) {
     $script:DataDir = [IO.Path]::GetFullPath($DataDir)
@@ -182,7 +227,12 @@ if ($DataDir) {
 $script:ConfigPath = Join-Path $script:DataDir 'config.json'
 $script:ExePath = Join-Path $script:InstallDir $script:ExeName
 $script:InstalledScript = Join-Path $script:InstallDir $script:InstallerName
-$script:StartMenuFolder = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\DDNS Updater'
+
+$managesService = ($Action -eq 'Uninstall') -or
+    (($Action -eq 'Install' -or $Action -eq 'Update') -and -not $NoService)
+if ($managesService -and -not (Test-IsAdministrator)) {
+    Request-Elevation
+}
 
 $script:ServiceId = 'DDNSUpdater'
 $script:ServiceDisplayName = 'DDNS Updater'
@@ -648,22 +698,42 @@ function Get-InstalledVersion {
     return ''
 }
 
+function Get-TargetUserPath {
+    if ($script:UserEnvironmentKey) {
+        return (Get-ItemProperty -LiteralPath $script:UserEnvironmentKey -Name Path -ErrorAction SilentlyContinue).Path
+    }
+    return [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
+function Set-TargetUserPath {
+    param([string]$Value)
+
+    if ($script:UserEnvironmentKey) {
+        if (-not (Test-Path -LiteralPath $script:UserEnvironmentKey)) {
+            New-Item -Path $script:UserEnvironmentKey -Force | Out-Null
+        }
+        Set-ItemProperty -LiteralPath $script:UserEnvironmentKey -Name Path -Value $Value
+    } else {
+        [Environment]::SetEnvironmentVariable('Path', $Value, 'User')
+    }
+}
+
 function Add-InstallDirectoryToUserPath {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $userPath = Get-TargetUserPath
     if ([string]::IsNullOrWhiteSpace($userPath)) { $userPath = '' }
     $entries = @($userPath -split ';' | Where-Object { $_.Trim() })
     if ($entries -notcontains $script:InstallDir) {
         $entries += $script:InstallDir
-        [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')
+        Set-TargetUserPath -Value ($entries -join ';')
         Write-Host 'Added the install directory to your user PATH (new terminals only).'
     }
 }
 
 function Remove-InstallDirectoryFromUserPath {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $userPath = Get-TargetUserPath
     if ([string]::IsNullOrWhiteSpace($userPath)) { return }
     $entries = @($userPath -split ';' | Where-Object { $_.Trim() -and $_ -ne $script:InstallDir })
-    [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')
+    Set-TargetUserPath -Value ($entries -join ';')
 }
 
 function Stop-DdnsProcess {
