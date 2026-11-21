@@ -67,7 +67,8 @@
 
 .PARAMETER Token
     DuckDNS token to write to the config instead of prompting. Note that
-    command-line arguments are visible to other processes; prompting is safer.
+    command-line arguments may be visible to other processes. The token is
+    validated against the DuckDNS UUID format before it is saved.
 
 .EXAMPLE
     .\install-windows.ps1
@@ -126,7 +127,7 @@ $script:RepoOwner = 'qdm12'
 $script:RepoName = 'ddns-updater'
 $script:LatestReleaseUrl = "https://api.github.com/repos/$script:RepoOwner/$script:RepoName/releases/latest"
 $script:AppName = 'DDNS Updater'
-$script:InstallerVersion = '1.1.0'
+$script:InstallerVersion = '1.2.0'
 $script:ExeName = 'ddns-updater.exe'
 $script:InstallerName = 'DDNS-Updater-Install.ps1'
 $script:PowerShellExe = (Get-Process -Id $PID).Path
@@ -534,19 +535,36 @@ function Read-DuckDnsDomain {
 function Read-DuckDnsToken {
     param([string]$InitialValue)
 
+    # DuckDNS tokens are lowercase UUIDs and upstream validates this format.
+    # Check it here so a failed paste cannot be written to config.json.
+    $tokenPattern = '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+    $formatHint = 'Expected a 36-character DuckDNS token, for example xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (hex digits and hyphens). Check that the paste completed.'
+    $wasProvided = $PSBoundParameters.ContainsKey('InitialValue')
+
     while ($true) {
-        if ($InitialValue) {
+        if ($wasProvided) {
             $value = $InitialValue
         } else {
-            $secureToken = Read-Host 'DuckDNS token (input is hidden)' -AsSecureString
-            $value = [Net.NetworkCredential]::new('', $secureToken).Password
+            # Echo the input so the user can see immediately whether a paste
+            # worked. -AsSecureString masked a literal Ctrl+V (U+0016) as
+            # asterisks and let that single character be saved as the token.
+            $value = Read-Host 'DuckDNS token'
         }
         $InitialValue = $null
 
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            return $value.Trim()
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            if ($wasProvided) { throw 'The DuckDNS token parameter is empty.' }
+            Write-Warning 'A token is required.'
+            continue
         }
-        Write-Warning 'A token is required.'
+
+        $value = $value.Trim().ToLowerInvariant()
+        if ($value -notmatch $tokenPattern) {
+            if ($wasProvided) { throw "The DuckDNS token parameter is invalid. $formatHint" }
+            Write-Warning "That does not look like a DuckDNS token. $formatHint"
+            continue
+        }
+        return $value
     }
 }
 
