@@ -18,7 +18,7 @@ The command writes the encoded installer to a temporary file, runs it with `-Exe
 
 ## Graphical installer (optional)
 
-If you prefer a wizard instead of pasting a command, `install-windows.nsi` builds a graphical installer. It asks for the DuckDNS domain and token in visible fields (so you can confirm a paste worked), lets you choose whether to create the background service and add the install directory to `PATH`, then runs the same PowerShell installer.
+If you prefer a wizard instead of pasting a command, `install-windows.nsi` builds a graphical installer. It asks for the DuckDNS domain and token in visible fields (so you can confirm a paste worked), lets you choose whether to create the background service and add the install directory to `PATH`, then runs the same PowerShell installer. You only need to enter the subdomain (for example `myhome`); `.duckdns.org` is added automatically and shown back to you before installing.
 
 Build it on Linux:
 

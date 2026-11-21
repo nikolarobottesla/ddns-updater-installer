@@ -53,7 +53,7 @@ Function ConfigPageShow
         Abort
     ${EndIf}
 
-    ${NSD_CreateLabel} 0 0 100% 14u "DuckDNS domain (for example myhome.duckdns.org):"
+    ${NSD_CreateLabel} 0 0 100% 14u "DuckDNS domain (for example myhome - .duckdns.org is added automatically):"
     Pop $TempValue
     ${NSD_CreateText} 0 17u 100% 13u ""
     Pop $DomainText
@@ -83,7 +83,37 @@ Function ConfigPageLeave
         Abort
     ${EndIf}
 
-    ; The domain must be a subdomain of duckdns.org (12 characters).
+    ; Add the top-level domain when the user entered only the subdomain. This
+    ; mirrors Read-DuckDnsDomain in install-windows.ps1, and showing the result
+    ; in the field lets the user see exactly what will be written to config.json.
+    ; Drop trailing dots first so "myhome." does not become "myhome..duckdns.org".
+    strip_trailing_dots:
+    StrLen $0 $DomainValue
+    ${If} $0 > 0
+        IntOp $3 $0 - 1
+        StrCpy $2 $DomainValue 1 $3
+        ${If} $2 == "."
+            StrCpy $DomainValue $DomainValue $3
+            Goto strip_trailing_dots
+        ${EndIf}
+    ${EndIf}
+    ${If} $DomainValue == ""
+        MessageBox MB_ICONEXCLAMATION "Please enter your DuckDNS domain."
+        Abort
+    ${EndIf}
+
+    StrLen $0 $DomainValue
+    ${If} $0 > 11
+        StrCpy $1 $DomainValue 12 -12
+    ${Else}
+        StrCpy $1 ""
+    ${EndIf}
+    ${If} $1 != ".duckdns.org"
+        StrCpy $DomainValue "$DomainValue.duckdns.org"
+    ${EndIf}
+    ${NSD_SetText} $DomainText $DomainValue
+
+    ; The domain must now be a subdomain of duckdns.org (12 characters).
     StrLen $0 $DomainValue
     ${If} $0 < 13
         MessageBox MB_ICONEXCLAMATION "The domain must end with .duckdns.org (for example myhome.duckdns.org)."
