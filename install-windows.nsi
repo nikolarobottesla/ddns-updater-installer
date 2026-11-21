@@ -9,7 +9,7 @@
 ; important: it keeps the original user's profile and registry hive intact.
 
 !define APP_NAME        "DDNS Updater"
-!define APP_VERSION     "1.2.0"
+!define APP_VERSION     "1.2.1"
 !define APP_PUBLISHER   "qdm12"
 !define SCRIPT_NAME     "DDNS-Updater-Install.ps1"
 !define INSTALLER_FILE  "DDNS-Updater-Setup-${APP_VERSION}.exe"
