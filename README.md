@@ -16,6 +16,20 @@ $p='PCMKLlNZTk9QU0lTCiAgICBJbnN0YWxscyB0aGUgbGF0ZXN0IHFkbTEyL2RkbnMtdXBkYXRlciBX
 
 The command writes the encoded installer to a temporary file, runs it with `-ExecutionPolicy Bypass`, and removes the file when it finishes. You do not need to download the script or change your machine's execution policy.
 
+## Graphical installer (optional)
+
+If you prefer a wizard instead of pasting a command, `install-windows.nsi` builds a graphical installer. It asks for the DuckDNS domain and token in visible fields (so you can confirm a paste worked), lets you choose whether to create the background service and add the install directory to `PATH`, then runs the same PowerShell installer.
+
+Build it on Linux:
+
+```bash
+nix-shell -p nsis --run 'makensis install-windows.nsi'
+```
+
+On Windows, install [NSIS 3](https://nsis.sourceforge.io/Download) and right-click `install-windows.nsi` → **Compile**.
+
+The result is `DDNS-Updater-Setup-1.2.0.exe`. It runs unelevated so the installer script can resolve your user profile correctly, and it still shows a UAC prompt when it needs to create the service. Uninstall with the **Uninstall DDNS Updater** Start menu shortcut.
+
 ## What the installer does
 
 - Downloads the latest Windows release from GitHub and verifies its SHA-256 checksum.
